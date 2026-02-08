@@ -46,7 +46,8 @@ def call_api(method, endpoint, data=None):
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            # We assume Manager is on the SAME server as Outline, so localhost is fine for API calls
+            # Note: verify=False is used because Outline typically uses self-signed certs.
+            # In a strictly internal network, this is acceptable.
             response = requests.request(method, url, json=data, verify=False, timeout=10)
             if 200 <= response.status_code < 300: return response.json()
             if response.status_code == 404 and method == 'DELETE': return {}
@@ -69,8 +70,9 @@ def calculate_expiry_date(duration_str, base_date=None):
     return (start_time + datetime.timedelta(hours=hours_to_add)).strftime('%Y-%m-%d %H:%M:%S')
 
 def check_local_access():
-    # Security: Admin actions are ONLY allowed from Localhost (The Menu Script)
-    if request.remote_addr != '127.0.0.1': return False
+    # Allow IPv4 localhost and IPv6 localhost
+    if request.remote_addr not in ['127.0.0.1', '::1']: 
+        return False
     return True
 
 # --- ROUTES ---
@@ -109,14 +111,17 @@ def add_user():
             limit_bytes = int(float(gb) * 1000 * 1000 * 1000)
     except ValueError: return jsonify({"error": "Invalid GB format"}), 400
 
+    # 1. API CALL FIRST
     new_key = call_api('POST', 'access-keys')
     if not new_key: return jsonify({"error": "Outline API Error"}), 500
     key_id = new_key['id']
     
+    # 2. Configure Key
     call_api('PUT', f'access-keys/{key_id}/name', {'name': name})
     if limit_bytes > 0:
         call_api('PUT', f'access-keys/{key_id}/data-limit', {'limit': {'bytes': limit_bytes}})
 
+    # 3. DB Insert (Only if API succeeded)
     token = generate_token()
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -125,7 +130,6 @@ def add_user():
     conn.commit()
     conn.close()
 
-    # Generating link with the Domain from Config (which should be the Iran Domain)
     safe_name = urllib.parse.quote(name)
     sub_link = f"ssconf://{conf['subscription_domain']}/getsub/{token}#{safe_name}"
     
@@ -166,17 +170,24 @@ def renew_user():
         new_expiry = calculate_expiry_date(add_duration, base_time)
 
     new_limit = current_limit
+    limit_changed = False
+    
     if add_gb and str(add_gb).strip():
         try:
              if str(add_gb) == '0':
                  new_limit = 0
-                 call_api('DELETE', f'access-keys/{key_id}/data-limit')
              else:
                  bytes_to_add = int(float(add_gb) * 1000 * 1000 * 1000)
                  new_limit = bytes_to_add if current_limit == 0 else current_limit + bytes_to_add
-                 call_api('PUT', f'access-keys/{key_id}/data-limit', {'limit': {'bytes': new_limit}})
+             limit_changed = True
         except ValueError: pass 
 
+    # 1. API CALL
+    if limit_changed:
+        if new_limit == 0: call_api('DELETE', f'access-keys/{key_id}/data-limit')
+        else: call_api('PUT', f'access-keys/{key_id}/data-limit', {'limit': {'bytes': new_limit}})
+
+    # 2. DB UPDATE
     c.execute("UPDATE users SET expiry_date=?, data_limit=?, status='active' WHERE token=?", (new_expiry, new_limit, token))
     conn.commit()
     conn.close()
@@ -208,6 +219,7 @@ def list_users():
         limit = limit_map.get(key_id, limit_db)
         used = usage_map.get(key_id, 0)
 
+        # Logic: On Hold -> Active upon usage
         if status == 'on_hold' and used > 0:
             new_expiry = calculate_expiry_date(init_duration)
             status = 'active'
@@ -251,11 +263,15 @@ def suspend_user():
     res = c.fetchone()
     if res:
         key_id = res[0]
-        call_api('PUT', f'access-keys/{key_id}/data-limit', {'limit': {'bytes': 1}})
-        c.execute("UPDATE users SET status='suspended' WHERE token=?", (token,))
-        conn.commit()
-        conn.close()
-        return jsonify({"status": "Suspended"})
+        # API First
+        if call_api('PUT', f'access-keys/{key_id}/data-limit', {'limit': {'bytes': 1}}):
+            c.execute("UPDATE users SET status='suspended' WHERE token=?", (token,))
+            conn.commit()
+            conn.close()
+            return jsonify({"status": "Suspended"})
+        else:
+            conn.close()
+            return jsonify({"error": "API Error"}), 502
     return jsonify({"error": "Not Found"}), 404
 
 @app.route('/unsuspend', methods=['POST'])
@@ -268,12 +284,21 @@ def unsuspend_user():
     res = c.fetchone()
     if res:
         key_id, original_limit = res
-        if original_limit == 0: call_api('DELETE', f'access-keys/{key_id}/data-limit')
-        else: call_api('PUT', f'access-keys/{key_id}/data-limit', {'limit': {'bytes': original_limit}})
-        c.execute("UPDATE users SET status='active' WHERE token=?", (token,))
-        conn.commit()
-        conn.close()
-        return jsonify({"status": "Active"})
+        api_success = False
+        # API First
+        if original_limit == 0: 
+            if call_api('DELETE', f'access-keys/{key_id}/data-limit'): api_success = True
+        else: 
+            if call_api('PUT', f'access-keys/{key_id}/data-limit', {'limit': {'bytes': original_limit}}): api_success = True
+        
+        if api_success:
+            c.execute("UPDATE users SET status='active' WHERE token=?", (token,))
+            conn.commit()
+            conn.close()
+            return jsonify({"status": "Active"})
+        else:
+            conn.close()
+            return jsonify({"error": "API Error"}), 502
     return jsonify({"error": "Not Found"}), 404
 
 @app.route('/clean_expired', methods=['POST'])
@@ -291,9 +316,10 @@ def clean_expired():
             if expiry_str:
                 exp_date = datetime.datetime.strptime(expiry_str, '%Y-%m-%d %H:%M:%S')
                 if now > exp_date:
-                    call_api('DELETE', f'access-keys/{key_id}')
-                    c.execute("DELETE FROM users WHERE key_id=?", (key_id,))
-                    deleted_count += 1
+                    # API First
+                    if call_api('DELETE', f'access-keys/{key_id}'):
+                         c.execute("DELETE FROM users WHERE key_id=?", (key_id,))
+                         deleted_count += 1
         except: continue
     conn.commit()
     conn.close()
@@ -310,7 +336,8 @@ def delete_user():
     res = c.fetchone()
     if res:
         key_id = res[0]
-        call_api('DELETE', f'access-keys/{key_id}')
+        # API First
+        call_api('DELETE', f'access-keys/{key_id}') # We don't check result because 404 is also fine
         c.execute("DELETE FROM users WHERE token=?", (token,))
         conn.commit()
         conn.close()
@@ -320,7 +347,7 @@ def delete_user():
 
 @app.route('/getsub/<token>')
 def get_sub(token):
-    # PUBLIC ACCESS ALLOWED (For Iran Server to fetch data)
+    # Public Access
     conf = load_config()
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -344,7 +371,8 @@ def get_sub(token):
 
     original_url = target_key['accessUrl']
     base = original_url.split('?')[0]
-    match = re.match(r'ss://(?P<u >[^@]+)@(?P<h>[^:]+):(?P<p>\d+)', base)
+    # Regex Fix: Removed space in group name (?P<u > -> ?P<u>)
+    match = re.match(r'ss://(?P<u>[^@]+)@(?P<h>[^:]+):(?P<p>\d+)', base)
     
     final_response_text = original_url 
     if match:
@@ -355,11 +383,13 @@ def get_sub(token):
 
     response = make_response(final_response_text)
     response.headers['Content-Type'] = 'text/plain; charset=utf-8'
-    response.headers['Content-Disposition'] = f'inline; filename="{db_name}"'
+    
+    # Sanitize Filename for Header Injection Protection
+    safe_filename = re.sub(r'[^\w\-. ]', '', db_name)
+    response.headers['Content-Disposition'] = f'inline; filename="{safe_filename}"'
     return response
 
 if __name__ == '__main__':
     init_db()
-    # SECURITY: Runs on 0.0.0.0 because it needs to accept requests from Iran Server IP.
-    # Note: 'check_local_access' function protects admin routes.
+    # IPv6/IPv4 Localhost check is implemented in 'check_local_access'
     app.run(host='0.0.0.0', port=5000, debug=False)

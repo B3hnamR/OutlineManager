@@ -27,16 +27,15 @@ INFO_FILE="$INSTALL_DIR/.install_info"
 
 clear
 
-# ================= FUNCTIONS =================
-
 install_base_dependencies() {
-    # Always try to install nano and curl/git if missing
-    echo -e "${YELLOW}>>> Checking Dependencies...${PLAIN}"
-    apt update -y > /dev/null 2>&1
-    apt install -y curl git nano > /dev/null 2>&1
+    # Ensure nano is installed
+    echo -e "${YELLOW}>>> Checking System Dependencies...${PLAIN}"
+    if ! command -v git &> /dev/null || ! command -v curl &> /dev/null || ! command -v nano &> /dev/null; then
+        apt update -y > /dev/null 2>&1
+        apt install -y curl git nano > /dev/null 2>&1
+    fi
 }
 
-# --- KHAREJ (CORE) INSTALLATION ---
 install_core_kharej() {
     echo -e "${CYAN}>>> Installing KHAREJ (Core) Components...${PLAIN}"
     apt update -y
@@ -106,7 +105,6 @@ EOF
     echo -e "Use command '${YELLOW}$SHORTCUT_CMD${PLAIN}' to open the menu."
 }
 
-# --- IRAN (BRIDGE) INSTALLATION ---
 install_bridge_iran() {
     echo -e "${CYAN}>>> Installing IRAN (Bridge) Components...${PLAIN}"
     apt update -y
@@ -160,7 +158,6 @@ EOF
     fi
 }
 
-# --- UNINSTALL LOGIC ---
 uninstall() {
     if [ -f "$INFO_FILE" ]; then source "$INFO_FILE"; else if [ -f "$SERVICE_FILE" ]; then TYPE="core"; else TYPE="bridge"; fi; fi
 
@@ -200,42 +197,13 @@ uninstall() {
 
 edit_config() {
     if [ -f "$CONFIG_FILE" ]; then
-        if command -v nano &> /dev/null; then
-            nano "$CONFIG_FILE"
-            echo -e "${YELLOW}>>> Restarting Service...${PLAIN}"
-            systemctl restart $SERVICE_NAME
-            echo -e "${GREEN}>>> Done.${PLAIN}"
-        else
-            echo -e "${RED}Error: nano is not installed. Installing...${PLAIN}"
-            apt install nano -y
-            edit_config
-        fi
+        nano "$CONFIG_FILE"
+        echo -e "${YELLOW}>>> Restarting Service...${PLAIN}"
+        systemctl restart $SERVICE_NAME
+        echo -e "${GREEN}>>> Done.${PLAIN}"
     else
         echo -e "${RED}Config file not found!${PLAIN}"
     fi
-}
-
-# ================= MENUS =================
-
-show_install_menu() {
-    clear
-    echo -e "\n${CYAN}========================================${PLAIN}"
-    echo -e "${CYAN}   OUTLINE MANAGER SETUP (SPLIT MODE)   ${PLAIN}"
-    echo -e "${CYAN}========================================${PLAIN}"
-    echo "1. Install on KHAREJ Server (Core & Manager)"
-    echo "2. Install on IRAN Server (Bridge & SSL)"
-    echo "3. Uninstall (Force)"
-    echo "0. Exit"
-    echo -e "${CYAN}----------------------------------------${PLAIN}"
-    read -p "Select Mode: " mode
-
-    case $mode in
-        1) install_core_kharej ;;
-        2) install_bridge_iran ;;
-        3) uninstall ;;
-        0) exit 0 ;;
-        *) echo "Invalid option" ;;
-    esac
 }
 
 show_manage_menu() {
@@ -249,7 +217,7 @@ show_manage_menu() {
             echo "1. Edit Config & Restart"
             echo "2. View Service Logs"
             echo "3. Restart Service"
-            echo "4. Update Scripts (from GitHub)"
+            echo "4. Update Scripts"
             echo "5. Uninstall"
         elif [ "$TYPE" == "bridge" ]; then
             echo "1. Re-configure Nginx/SSL"
@@ -290,7 +258,26 @@ show_manage_menu() {
     done
 }
 
-# ================= ENTRY POINT =================
+show_install_menu() {
+    clear
+    echo -e "\n${CYAN}========================================${PLAIN}"
+    echo -e "${CYAN}   OUTLINE MANAGER SETUP (SPLIT MODE)   ${PLAIN}"
+    echo -e "${CYAN}========================================${PLAIN}"
+    echo "1. Install on KHAREJ Server (Core & Manager)"
+    echo "2. Install on IRAN Server (Bridge & SSL)"
+    echo "3. Uninstall (Force)"
+    echo "0. Exit"
+    echo -e "${CYAN}----------------------------------------${PLAIN}"
+    read -p "Select Mode: " mode
+
+    case $mode in
+        1) install_core_kharej ;;
+        2) install_bridge_iran ;;
+        3) uninstall ;;
+        0) exit 0 ;;
+        *) echo "Invalid option" ;;
+    esac
+}
 
 install_base_dependencies
 
