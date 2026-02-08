@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 
 # ===================================================
 #      OUTLINE MANAGER - SMART INSTALLER
@@ -122,7 +123,7 @@ install_bridge_iran() {
     echo -e "${CYAN}3. Enter your Email (for SSL):${PLAIN}"
     read -p "> " email_addr
 
-    rm /etc/nginx/sites-enabled/default 2>/dev/null
+    rm -f /etc/nginx/sites-enabled/default
 
     echo -e "${YELLOW}>>> Configuring Nginx...${PLAIN}"
     
@@ -140,10 +141,8 @@ server {
 }
 EOF
 
-    ln -s "/etc/nginx/sites-available/$domain_name" "/etc/nginx/sites-enabled/" 2>/dev/null
-    nginx -t
-
-    if [ $? -eq 0 ]; then
+    ln -sf "/etc/nginx/sites-available/$domain_name" "/etc/nginx/sites-enabled/"
+    if nginx -t; then
         systemctl reload nginx
         echo -e "${YELLOW}>>> Obtaining SSL Certificate...${PLAIN}"
         certbot --nginx -d "$domain_name" --non-interactive --agree-tos -m "$email_addr"
@@ -172,21 +171,21 @@ uninstall() {
             cp "$DB_FILE" "/root/users_backup_$(date +%F).db"
             echo -e "${GREEN}Database backed up.${PLAIN}"
         fi
-        systemctl stop $SERVICE_NAME 2>/dev/null
-        systemctl disable $SERVICE_NAME 2>/dev/null
-        rm "$SERVICE_FILE" 2>/dev/null
+        systemctl stop $SERVICE_NAME 2>/dev/null || true
+        systemctl disable $SERVICE_NAME 2>/dev/null || true
+        rm -f "$SERVICE_FILE"
         systemctl daemon-reload
-        rm "/usr/bin/$SHORTCUT_CMD" 2>/dev/null
+        rm -f "/usr/bin/$SHORTCUT_CMD"
         rm -rf "$INSTALL_DIR"
         
     elif [ "$TYPE" == "bridge" ]; then
         echo -e "${YELLOW}>>> Removing Bridge Components...${PLAIN}"
         if [ -z "$DOMAIN" ]; then read -p "Enter the domain to clean up (leave empty if unknown): " DOMAIN; fi
         if [ ! -z "$DOMAIN" ]; then
-            certbot delete --cert-name "$DOMAIN" --non-interactive 2>/dev/null
-            rm "/etc/nginx/sites-enabled/$DOMAIN" 2>/dev/null
-            rm "/etc/nginx/sites-available/$DOMAIN" 2>/dev/null
-            systemctl reload nginx
+            certbot delete --cert-name "$DOMAIN" --non-interactive 2>/dev/null || true
+            rm -f "/etc/nginx/sites-enabled/$DOMAIN"
+            rm -f "/etc/nginx/sites-available/$DOMAIN"
+            systemctl reload nginx || true
             echo -e "${GREEN}Removed Nginx config for $DOMAIN${PLAIN}"
         fi
         rm -rf "$INSTALL_DIR"

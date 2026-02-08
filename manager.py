@@ -183,9 +183,16 @@ def renew_user():
         except ValueError: pass 
 
     # 1. API CALL
+    api_ok = True
     if limit_changed:
-        if new_limit == 0: call_api('DELETE', f'access-keys/{key_id}/data-limit')
-        else: call_api('PUT', f'access-keys/{key_id}/data-limit', {'limit': {'bytes': new_limit}})
+        if new_limit == 0:
+            api_ok = call_api('DELETE', f'access-keys/{key_id}/data-limit') is not None
+        else:
+            api_ok = call_api('PUT', f'access-keys/{key_id}/data-limit', {'limit': {'bytes': new_limit}}) is not None
+
+    if not api_ok:
+        conn.close()
+        return jsonify({"error": "API Error"}), 502
 
     # 2. DB UPDATE
     c.execute("UPDATE users SET expiry_date=?, data_limit=?, status='active' WHERE token=?", (new_expiry, new_limit, token))
@@ -337,11 +344,15 @@ def delete_user():
     if res:
         key_id = res[0]
         # API First
-        call_api('DELETE', f'access-keys/{key_id}') # We don't check result because 404 is also fine
-        c.execute("DELETE FROM users WHERE token=?", (token,))
-        conn.commit()
-        conn.close()
-        return jsonify({"status": "Deleted"})
+        api_result = call_api('DELETE', f'access-keys/{key_id}')
+        if api_result is not None:
+            c.execute("DELETE FROM users WHERE token=?", (token,))
+            conn.commit()
+            conn.close()
+            return jsonify({"status": "Deleted"})
+        else:
+            conn.close()
+            return jsonify({"error": "API Error"}), 502
     conn.close()
     return jsonify({"error": "Not Found"}), 404
 
@@ -385,7 +396,9 @@ def get_sub(token):
     response.headers['Content-Type'] = 'text/plain; charset=utf-8'
     
     # Sanitize Filename for Header Injection Protection
-    safe_filename = re.sub(r'[^\w\-. ]', '', db_name)
+    safe_filename = re.sub(r'[^\w\-. ]', '', db_name).strip()
+    if not safe_filename:
+        safe_filename = f"outline-{token}"
     response.headers['Content-Disposition'] = f'inline; filename="{safe_filename}"'
     return response
 
