@@ -30,7 +30,6 @@ clear
 # ================= FUNCTIONS =================
 
 install_base_dependencies() {
-    # Check if git/curl exists to avoid spamming logs
     if ! command -v git &> /dev/null || ! command -v curl &> /dev/null; then
         echo -e "${YELLOW}>>> Installing Base Dependencies...${PLAIN}"
         apt update -y
@@ -132,13 +131,12 @@ install_bridge_iran() {
     echo -e "${CYAN}3. Enter your Email (for SSL):${PLAIN}"
     read -p "> " email_addr
 
-    # Clean default nginx to avoid conflicts
+    # Clean default nginx
     rm /etc/nginx/sites-enabled/default 2>/dev/null
 
     # Nginx Config
     echo -e "${YELLOW}>>> Configuring Nginx...${PLAIN}"
     
-    # FIXED: Uses $kharej_ip instead of 127.0.0.1
 cat > "/etc/nginx/sites-available/$domain_name" <<EOF
 server {
     listen 80;
@@ -174,10 +172,11 @@ EOF
 
 # --- UNINSTALL LOGIC ---
 uninstall() {
+    # Detect Type
     if [ -f "$INFO_FILE" ]; then
         source "$INFO_FILE"
     else
-        # Fallback detection
+        # Fallback: Check if service exists (Core) or Nginx config (Bridge)
         if [ -f "$SERVICE_FILE" ]; then TYPE="core"; else TYPE="bridge"; fi
     fi
 
@@ -205,7 +204,7 @@ uninstall() {
         echo -e "${YELLOW}>>> Removing Bridge Components...${PLAIN}"
         
         if [ -z "$DOMAIN" ]; then
-            read -p "Enter the domain to clean up: " DOMAIN
+            read -p "Enter the domain to clean up (leave empty if unknown): " DOMAIN
         fi
         
         if [ ! -z "$DOMAIN" ]; then
@@ -242,6 +241,7 @@ show_install_menu() {
     echo -e "${CYAN}========================================${PLAIN}"
     echo "1. Install on KHAREJ Server (Core & Manager)"
     echo "2. Install on IRAN Server (Bridge & SSL)"
+    echo "3. Uninstall (Force)" # Added fallback option
     echo "0. Exit"
     echo -e "${CYAN}----------------------------------------${PLAIN}"
     read -p "Select Mode: " mode
@@ -249,6 +249,7 @@ show_install_menu() {
     case $mode in
         1) install_core_kharej ;;
         2) install_bridge_iran ;;
+        3) uninstall ;;
         0) exit 0 ;;
         *) echo "Invalid option" ;;
     esac
@@ -258,6 +259,11 @@ show_manage_menu() {
     # Load info
     TYPE="unknown"
     [ -f "$INFO_FILE" ] && source "$INFO_FILE"
+    
+    # If info file missing but folder exists, try to guess
+    if [ "$TYPE" == "unknown" ]; then
+         if [ -f "$SERVICE_FILE" ]; then TYPE="core"; else TYPE="bridge"; fi
+    fi
 
     echo -e "\n${CYAN}--- MANAGER MENU ($TYPE) ---${PLAIN}"
     
@@ -293,7 +299,7 @@ show_manage_menu() {
         esac
     elif [ "$TYPE" == "bridge" ]; then
         case $choice in
-            1) install_bridge_iran ;; # Re-run bridge setup
+            1) install_bridge_iran ;; 
             5) uninstall ;;
             0) exit 0 ;;
         esac
@@ -304,11 +310,12 @@ show_manage_menu() {
 
 install_base_dependencies
 
-# Smart Detection
-if [ -d "$INSTALL_DIR" ] && [ -f "$INFO_FILE" ]; then
+# Smart Detection Logic
+# If .install_info exists OR service file exists OR nginx site exists
+if [ -f "$INFO_FILE" ] || [ -f "$SERVICE_FILE" ]; then
     show_manage_menu
 else
-    # Check if manual run parameters passed
+    # Also check manual args
     if [ "$1" == "install" ]; then
         show_install_menu
     elif [ "$1" == "uninstall" ]; then
