@@ -20,7 +20,7 @@ GITHUB_REPO="https://github.com/B3hnamR/OutlineManager"
 DB_FILE="$INSTALL_DIR/users.db"
 CONFIG_FILE="$INSTALL_DIR/config.json"
 SHORTCUT_CMD="outline"
-INFO_FILE="$INSTALL_DIR/.install_info" # Stores type (core/bridge) and domain
+INFO_FILE="$INSTALL_DIR/.install_info"
 
 # Check Root
 [[ $EUID -ne 0 ]] && echo -e "${RED}Error: This script must be run as root!${PLAIN}" && exit 1
@@ -30,11 +30,10 @@ clear
 # ================= FUNCTIONS =================
 
 install_base_dependencies() {
-    if ! command -v git &> /dev/null || ! command -v curl &> /dev/null; then
-        echo -e "${YELLOW}>>> Installing Base Dependencies...${PLAIN}"
-        apt update -y
-        apt install -y curl git
-    fi
+    # Always try to install nano and curl/git if missing
+    echo -e "${YELLOW}>>> Checking Dependencies...${PLAIN}"
+    apt update -y > /dev/null 2>&1
+    apt install -y curl git nano > /dev/null 2>&1
 }
 
 # --- KHAREJ (CORE) INSTALLATION ---
@@ -45,13 +44,11 @@ install_core_kharej() {
     
     mkdir -p "$INSTALL_DIR"
     
-    # Download Files
     echo -e "${CYAN}>>> Downloading files...${PLAIN}"
     git clone "$GITHUB_REPO" /tmp/outline_temp
     cp /tmp/outline_temp/*.py "$INSTALL_DIR/"
     rm -rf /tmp/outline_temp
 
-    # Venv Setup
     if [ ! -d "$INSTALL_DIR/venv" ]; then
         echo -e "${YELLOW}>>> Setting up Python Environment...${PLAIN}"
         python3 -m venv "$INSTALL_DIR/venv"
@@ -59,7 +56,6 @@ install_core_kharej() {
         "$INSTALL_DIR/venv/bin/pip" install flask requests psutil qrcode
     fi
 
-    # Configuration
     echo -e "\n${GREEN}--- CONFIGURATION ---${PLAIN}"
     if [ -f "$CONFIG_FILE" ]; then
         echo -e "${YELLOW}Config file already exists. Skipping creation.${PLAIN}"
@@ -80,7 +76,6 @@ install_core_kharej() {
 EOF
     fi
 
-    # Service
     echo -e "${YELLOW}>>> Creating Service...${PLAIN}"
 cat > "$SERVICE_FILE" <<EOF
 [Unit]
@@ -102,11 +97,9 @@ EOF
     systemctl enable $SERVICE_NAME
     systemctl restart $SERVICE_NAME
 
-    # Shortcut
     echo "cd $INSTALL_DIR && ./venv/bin/python3 menu.py" > "/usr/bin/$SHORTCUT_CMD"
     chmod +x "/usr/bin/$SHORTCUT_CMD"
 
-    # Save Install Info
     echo "TYPE=core" > "$INFO_FILE"
 
     echo -e "\n${GREEN}✔ KHAREJ SERVER INSTALLED SUCCESSFULLY!${PLAIN}"
@@ -131,10 +124,8 @@ install_bridge_iran() {
     echo -e "${CYAN}3. Enter your Email (for SSL):${PLAIN}"
     read -p "> " email_addr
 
-    # Clean default nginx
     rm /etc/nginx/sites-enabled/default 2>/dev/null
 
-    # Nginx Config
     echo -e "${YELLOW}>>> Configuring Nginx...${PLAIN}"
     
 cat > "/etc/nginx/sites-available/$domain_name" <<EOF
@@ -159,7 +150,6 @@ EOF
         echo -e "${YELLOW}>>> Obtaining SSL Certificate...${PLAIN}"
         certbot --nginx -d "$domain_name" --non-interactive --agree-tos -m "$email_addr"
         
-        # Save Install Info
         echo "TYPE=bridge" > "$INFO_FILE"
         echo "DOMAIN=$domain_name" >> "$INFO_FILE"
         
@@ -172,13 +162,7 @@ EOF
 
 # --- UNINSTALL LOGIC ---
 uninstall() {
-    # Detect Type
-    if [ -f "$INFO_FILE" ]; then
-        source "$INFO_FILE"
-    else
-        # Fallback: Check if service exists (Core) or Nginx config (Bridge)
-        if [ -f "$SERVICE_FILE" ]; then TYPE="core"; else TYPE="bridge"; fi
-    fi
+    if [ -f "$INFO_FILE" ]; then source "$INFO_FILE"; else if [ -f "$SERVICE_FILE" ]; then TYPE="core"; else TYPE="bridge"; fi; fi
 
     echo -e "${RED}WARNING: You are about to uninstall Outline Manager ($TYPE mode).${PLAIN}"
     read -p "Are you sure? (y/n): " confirm
@@ -186,13 +170,11 @@ uninstall() {
 
     if [ "$TYPE" == "core" ]; then
         echo -e "${YELLOW}>>> Removing Core Components...${PLAIN}"
-        
         read -p "Keep database backup? (y/n): " keep_db
         if [[ "$keep_db" == "y" ]] && [ -f "$DB_FILE" ]; then
             cp "$DB_FILE" "/root/users_backup_$(date +%F).db"
-            echo -e "${GREEN}Database backed up to /root/users_backup_...db${PLAIN}"
+            echo -e "${GREEN}Database backed up.${PLAIN}"
         fi
-
         systemctl stop $SERVICE_NAME 2>/dev/null
         systemctl disable $SERVICE_NAME 2>/dev/null
         rm "$SERVICE_FILE" 2>/dev/null
@@ -202,46 +184,47 @@ uninstall() {
         
     elif [ "$TYPE" == "bridge" ]; then
         echo -e "${YELLOW}>>> Removing Bridge Components...${PLAIN}"
-        
-        if [ -z "$DOMAIN" ]; then
-            read -p "Enter the domain to clean up (leave empty if unknown): " DOMAIN
-        fi
-        
+        if [ -z "$DOMAIN" ]; then read -p "Enter the domain to clean up (leave empty if unknown): " DOMAIN; fi
         if [ ! -z "$DOMAIN" ]; then
             certbot delete --cert-name "$DOMAIN" --non-interactive 2>/dev/null
             rm "/etc/nginx/sites-enabled/$DOMAIN" 2>/dev/null
             rm "/etc/nginx/sites-available/$DOMAIN" 2>/dev/null
             systemctl reload nginx
-            echo -e "${GREEN}Removed Nginx config and SSL for $DOMAIN${PLAIN}"
+            echo -e "${GREEN}Removed Nginx config for $DOMAIN${PLAIN}"
         fi
         rm -rf "$INSTALL_DIR"
     fi
-
     echo -e "${GREEN}>>> Uninstall Complete.${PLAIN}"
     exit 0
 }
 
-# --- EDIT CONFIG (CORE ONLY) ---
 edit_config() {
     if [ -f "$CONFIG_FILE" ]; then
-        nano "$CONFIG_FILE"
-        echo -e "${YELLOW}>>> Restarting Service...${PLAIN}"
-        systemctl restart $SERVICE_NAME
-        echo -e "${GREEN}>>> Done.${PLAIN}"
+        if command -v nano &> /dev/null; then
+            nano "$CONFIG_FILE"
+            echo -e "${YELLOW}>>> Restarting Service...${PLAIN}"
+            systemctl restart $SERVICE_NAME
+            echo -e "${GREEN}>>> Done.${PLAIN}"
+        else
+            echo -e "${RED}Error: nano is not installed. Installing...${PLAIN}"
+            apt install nano -y
+            edit_config
+        fi
     else
-        echo -e "${RED}Config file not found! (Are you on Iran server?)${PLAIN}"
+        echo -e "${RED}Config file not found!${PLAIN}"
     fi
 }
 
 # ================= MENUS =================
 
 show_install_menu() {
+    clear
     echo -e "\n${CYAN}========================================${PLAIN}"
     echo -e "${CYAN}   OUTLINE MANAGER SETUP (SPLIT MODE)   ${PLAIN}"
     echo -e "${CYAN}========================================${PLAIN}"
     echo "1. Install on KHAREJ Server (Core & Manager)"
     echo "2. Install on IRAN Server (Bridge & SSL)"
-    echo "3. Uninstall (Force)" # Added fallback option
+    echo "3. Uninstall (Force)"
     echo "0. Exit"
     echo -e "${CYAN}----------------------------------------${PLAIN}"
     read -p "Select Mode: " mode
@@ -256,71 +239,66 @@ show_install_menu() {
 }
 
 show_manage_menu() {
-    # Load info
     TYPE="unknown"
     [ -f "$INFO_FILE" ] && source "$INFO_FILE"
-    
-    # If info file missing but folder exists, try to guess
-    if [ "$TYPE" == "unknown" ]; then
-         if [ -f "$SERVICE_FILE" ]; then TYPE="core"; else TYPE="bridge"; fi
-    fi
+    if [ "$TYPE" == "unknown" ]; then if [ -f "$SERVICE_FILE" ]; then TYPE="core"; else TYPE="bridge"; fi; fi
 
-    echo -e "\n${CYAN}--- MANAGER MENU ($TYPE) ---${PLAIN}"
-    
-    if [ "$TYPE" == "core" ]; then
-        echo "1. Edit Config & Restart"
-        echo "2. View Service Logs"
-        echo "3. Restart Service"
-        echo "4. Update Scripts (from GitHub)"
-        echo "5. Uninstall"
-    elif [ "$TYPE" == "bridge" ]; then
-        echo "1. Re-configure Nginx/SSL"
-        echo "5. Uninstall"
-    fi
-    echo "0. Exit"
-    echo -e "${CYAN}----------------------------${PLAIN}"
-    read -p "Select: " choice
+    while true; do
+        echo -e "\n${CYAN}--- MANAGER MENU ($TYPE) ---${PLAIN}"
+        if [ "$TYPE" == "core" ]; then
+            echo "1. Edit Config & Restart"
+            echo "2. View Service Logs"
+            echo "3. Restart Service"
+            echo "4. Update Scripts (from GitHub)"
+            echo "5. Uninstall"
+        elif [ "$TYPE" == "bridge" ]; then
+            echo "1. Re-configure Nginx/SSL"
+            echo "5. Uninstall"
+        fi
+        echo "0. Exit"
+        echo -e "${CYAN}----------------------------${PLAIN}"
+        read -p "Select: " choice
 
-    if [ "$TYPE" == "core" ]; then
-        case $choice in
-            1) edit_config ;;
-            2) journalctl -u $SERVICE_NAME -n 50 -f ;;
-            3) systemctl restart $SERVICE_NAME && echo "${GREEN}Restarted.${PLAIN}" ;;
-            4) 
-                echo -e "${YELLOW}Updating...${PLAIN}"
-                git clone "$GITHUB_REPO" /tmp/outline_update
-                cp /tmp/outline_update/*.py "$INSTALL_DIR/"
-                rm -rf /tmp/outline_update
-                systemctl restart $SERVICE_NAME
-                echo -e "${GREEN}Updated.${PLAIN}"
-                ;;
-            5) uninstall ;;
-            0) exit 0 ;;
-        esac
-    elif [ "$TYPE" == "bridge" ]; then
-        case $choice in
-            1) install_bridge_iran ;; 
-            5) uninstall ;;
-            0) exit 0 ;;
-        esac
-    fi
+        if [ "$TYPE" == "core" ]; then
+            case $choice in
+                1) edit_config ;;
+                2) journalctl -u $SERVICE_NAME -n 50 -f ;;
+                3) systemctl restart $SERVICE_NAME && echo -e "${GREEN}Restarted.${PLAIN}" ;;
+                4) 
+                    echo -e "${YELLOW}Updating...${PLAIN}"
+                    git clone "$GITHUB_REPO" /tmp/outline_update
+                    cp /tmp/outline_update/*.py "$INSTALL_DIR/"
+                    rm -rf /tmp/outline_update
+                    systemctl restart $SERVICE_NAME
+                    echo -e "${GREEN}Updated.${PLAIN}"
+                    ;;
+                5) uninstall ;;
+                0) exit 0 ;;
+                *) echo "Invalid choice";;
+            esac
+        elif [ "$TYPE" == "bridge" ]; then
+            case $choice in
+                1) install_bridge_iran ;; 
+                5) uninstall ;;
+                0) exit 0 ;;
+                *) echo "Invalid choice";;
+            esac
+        fi
+        echo -e "${YELLOW}Press Enter to continue...${PLAIN}"
+        read
+        clear
+    done
 }
 
 # ================= ENTRY POINT =================
 
 install_base_dependencies
 
-# Smart Detection Logic
-# If .install_info exists OR service file exists OR nginx site exists
 if [ -f "$INFO_FILE" ] || [ -f "$SERVICE_FILE" ]; then
     show_manage_menu
 else
-    # Also check manual args
-    if [ "$1" == "install" ]; then
-        show_install_menu
-    elif [ "$1" == "uninstall" ]; then
-        uninstall
-    else
-        show_install_menu
+    if [ "$1" == "install" ]; then show_install_menu
+    elif [ "$1" == "uninstall" ]; then uninstall
+    else show_install_menu
     fi
 fi
