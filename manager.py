@@ -46,6 +46,7 @@ def call_api(method, endpoint, data=None):
     max_retries = 3
     for attempt in range(max_retries):
         try:
+            # We assume Manager is on the SAME server as Outline, so localhost is fine for API calls
             response = requests.request(method, url, json=data, verify=False, timeout=10)
             if 200 <= response.status_code < 300: return response.json()
             if response.status_code == 404 and method == 'DELETE': return {}
@@ -68,6 +69,7 @@ def calculate_expiry_date(duration_str, base_date=None):
     return (start_time + datetime.timedelta(hours=hours_to_add)).strftime('%Y-%m-%d %H:%M:%S')
 
 def check_local_access():
+    # Security: Admin actions are ONLY allowed from Localhost (The Menu Script)
     if request.remote_addr != '127.0.0.1': return False
     return True
 
@@ -123,6 +125,7 @@ def add_user():
     conn.commit()
     conn.close()
 
+    # Generating link with the Domain from Config (which should be the Iran Domain)
     safe_name = urllib.parse.quote(name)
     sub_link = f"ssconf://{conf['subscription_domain']}/getsub/{token}#{safe_name}"
     
@@ -317,7 +320,7 @@ def delete_user():
 
 @app.route('/getsub/<token>')
 def get_sub(token):
-    # Public Access
+    # PUBLIC ACCESS ALLOWED (For Iran Server to fetch data)
     conf = load_config()
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -357,5 +360,6 @@ def get_sub(token):
 
 if __name__ == '__main__':
     init_db()
-    # Runs on 0.0.0.0 for public subscription access, but admin routes are protected
+    # SECURITY: Runs on 0.0.0.0 because it needs to accept requests from Iran Server IP.
+    # Note: 'check_local_access' function protects admin routes.
     app.run(host='0.0.0.0', port=5000, debug=False)

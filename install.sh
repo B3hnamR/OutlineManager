@@ -26,78 +26,58 @@ SHORTCUT_CMD="outline"
 
 clear
 
-install_dependencies() {
+# --- FUNCTIONS ---
+
+install_base_dependencies() {
     echo -e "${YELLOW}>>> Installing System Dependencies...${PLAIN}"
     apt update -y
-    apt install -y python3 python3-pip python3-venv git curl nginx qrencode
-    echo -e "${GREEN}>>> Dependencies Installed.${PLAIN}"
+    apt install -y curl git
 }
 
-setup_environment() {
-    echo -e "${YELLOW}>>> Setting up Directory & Virtual Environment...${PLAIN}"
+install_core_kharej() {
+    echo -e "${CYAN}>>> Installing KHAREJ (Core) Components...${PLAIN}"
+    apt install -y python3 python3-pip python3-venv qrencode
     
-    if [ ! -d "$INSTALL_DIR" ]; then
-        mkdir -p "$INSTALL_DIR"
-    fi
+    # Setup Directory
+    mkdir -p "$INSTALL_DIR"
+    
+    # Download Files
+    echo -e "${CYAN}>>> Downloading files...${PLAIN}"
+    git clone "$GITHUB_REPO" /tmp/outline_temp
+    cp /tmp/outline_temp/*.py "$INSTALL_DIR/"
+    rm -rf /tmp/outline_temp
 
-    # Download or Copy Files
-    if [ -f "manager.py" ] && [ -f "menu.py" ]; then
-        echo -e "${CYAN}>>> Copying local files...${PLAIN}"
-        cp manager.py menu.py "$INSTALL_DIR/"
-    else
-        echo -e "${CYAN}>>> Downloading files from GitHub...${PLAIN}"
-        git clone "$GITHUB_REPO" /tmp/outline_temp
-        cp /tmp/outline_temp/*.py "$INSTALL_DIR/"
-        rm -rf /tmp/outline_temp
-    fi
-
-    # Create Venv
-    if [ ! -d "$INSTALL_DIR/venv" ]; then
-        python3 -m venv "$INSTALL_DIR/venv"
-    fi
-
-    # Install Python Libs
-    echo -e "${YELLOW}>>> Installing Python Libraries...${PLAIN}"
+    # Venv Setup
+    echo -e "${YELLOW}>>> Setting up Python Environment...${PLAIN}"
+    python3 -m venv "$INSTALL_DIR/venv"
     "$INSTALL_DIR/venv/bin/pip" install --upgrade pip
     "$INSTALL_DIR/venv/bin/pip" install flask requests psutil qrcode
-}
 
-configure_project() {
-    echo -e "${YELLOW}>>> Configuring Project...${PLAIN}"
-    
-    if [ -f "$CONFIG_FILE" ]; then
-        read -p "Config file exists. Overwrite? (y/n): " overwrite
-        if [[ "$overwrite" != "y" ]]; then return; fi
-    fi
-
-    echo -e "${CYAN}Enter Outline API URL (Management URL):${PLAIN}"
+    # Configuration
+    echo -e "\n${GREEN}--- CONFIGURATION ---${PLAIN}"
+    echo -e "${CYAN}1. Enter Outline API URL (Management URL from Outline Manager app):${PLAIN}"
     read -p "> " outline_api
 
-    echo -e "${CYAN}Enter Server IP (Tunnel Address):${PLAIN}"
+    echo -e "${CYAN}2. Enter YOUR IRAN DOMAIN (Tunnel Address):${PLAIN}"
+    echo -e "${YELLOW}(Example: sub.myirandomain.com)${PLAIN}"
     read -p "> " tunnel_address
 
-    echo -e "${CYAN}Enter Subscription Domain (e.g., example.com):${PLAIN}"
-    read -p "> " sub_domain
-
-    # Create config.json with Optimized Prefix
+    # Create Config
 cat > "$CONFIG_FILE" <<EOF
 {
     "outline_api": "$outline_api",
     "tunnel_address": "$tunnel_address",
     "force_port": null,
-    "subscription_domain": "$sub_domain",
+    "subscription_domain": "$tunnel_address",
     "custom_suffix": "?prefix=%16%03%01%00%40%01%01"
 }
 EOF
-    echo -e "${GREEN}>>> Config saved!${PLAIN}"
-}
 
-create_service() {
-    echo -e "${YELLOW}>>> Creating Systemd Service...${PLAIN}"
-    
+    # Service
+    echo -e "${YELLOW}>>> Creating Service...${PLAIN}"
 cat > "$SERVICE_FILE" <<EOF
 [Unit]
-Description=Outline Manager Service
+Description=Outline Manager Core Service
 After=network.target
 
 [Service]
@@ -114,88 +94,89 @@ EOF
     systemctl daemon-reload
     systemctl enable $SERVICE_NAME
     systemctl restart $SERVICE_NAME
-    echo -e "${GREEN}>>> Service Started & Enabled!${PLAIN}"
-}
 
-create_shortcut() {
+    # Shortcut
     echo "cd $INSTALL_DIR && ./venv/bin/python3 menu.py" > "/usr/bin/$SHORTCUT_CMD"
     chmod +x "/usr/bin/$SHORTCUT_CMD"
+
+    echo -e "\n${GREEN}✔ KHAREJ SERVER INSTALLED SUCCESSFULLY!${PLAIN}"
+    echo -e "Now go to your Iran server and install the 'Iran (Bridge)' mode."
+    echo -e "Use command '${YELLOW}$SHORTCUT_CMD${PLAIN}' to open menu."
 }
 
-print_summary() {
-    echo -e "\n${GREEN}=======================================${PLAIN}"
-    echo -e "${GREEN}      INSTALLATION COMPLETE! 🚀      ${PLAIN}"
-    echo -e "${GREEN}=======================================${PLAIN}"
-    echo -e "${CYAN}Installation Path:${PLAIN} $INSTALL_DIR"
-    echo -e "${CYAN}Service Name:${PLAIN}      $SERVICE_NAME"
-    echo -e "${CYAN}Config File:${PLAIN}       $CONFIG_FILE"
-    echo -e "${CYAN}Command to Run:${PLAIN}    ${YELLOW}$SHORTCUT_CMD${PLAIN}"
-    echo -e "${GREEN}=======================================${PLAIN}"
-    
-    echo -e "${YELLOW}NOTE:${PLAIN} If you use Nginx for subscription link (port 80),"
-    echo -e "ensure you have added the 'location /getsub/' proxy block to Nginx."
-}
+install_bridge_iran() {
+    echo -e "${CYAN}>>> Installing IRAN (Bridge) Components...${PLAIN}"
+    apt install -y nginx certbot python3-certbot-nginx
 
-full_install() {
-    install_dependencies
-    setup_environment
-    configure_project
-    create_service
-    create_shortcut
-    print_summary
+    echo -e "\n${GREEN}--- BRIDGE CONFIGURATION ---${PLAIN}"
+    echo -e "${CYAN}1. Enter your Domain (e.g., sub.example.com):${PLAIN}"
+    read -p "> " domain_name
+
+    echo -e "${CYAN}2. Enter KHAREJ Server IP:${PLAIN}"
+    read -p "> " kharej_ip
+
+    echo -e "${CYAN}3. Enter your Email (for SSL):${PLAIN}"
+    read -p "> " email_addr
+
+    # Nginx Config
+    echo -e "${YELLOW}>>> Configuring Nginx...${PLAIN}"
+cat > "/etc/nginx/sites-available/$domain_name" <<EOF
+server {
+    listen 80;
+    server_name $domain_name;
+
+    location /getsub/ {
+        proxy_pass http://$kharej_ip:5000;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    }
+}
+EOF
+
+    ln -s "/etc/nginx/sites-available/$domain_name" "/etc/nginx/sites-enabled/" 2>/dev/null
+    rm /etc/nginx/sites-enabled/default 2>/dev/null
+    nginx -t
+
+    if [ $? -eq 0 ]; then
+        systemctl reload nginx
+        echo -e "${YELLOW}>>> Obtaining SSL Certificate...${PLAIN}"
+        certbot --nginx -d "$domain_name" --non-interactive --agree-tos -m "$email_addr"
+        echo -e "\n${GREEN}✔ IRAN SERVER CONFIGURED!${PLAIN}"
+        echo -e "Your subscription link will be: https://$domain_name/getsub/..."
+    else
+        echo -e "${RED}✘ Nginx Config Failed! Check logs.${PLAIN}"
+    fi
 }
 
 uninstall() {
-    echo -e "${RED}WARNING: This will remove Outline Manager.${PLAIN}"
-    read -p "Keep database backup? (y/n): " keep_db
-    
-    if [[ "$keep_db" == "y" ]]; then
-        if [ -f "$DB_FILE" ]; then
-            cp "$DB_FILE" "/root/users_backup_$(date +%F).db"
-            echo -e "${GREEN}Database backed up to /root/users_backup_...db${PLAIN}"
-        fi
-    fi
-
-    systemctl stop $SERVICE_NAME
-    systemctl disable $SERVICE_NAME
-    rm "$SERVICE_FILE"
-    systemctl daemon-reload
-    
+    echo -e "${RED}WARNING: Removing Outline Manager...${PLAIN}"
+    systemctl stop $SERVICE_NAME 2>/dev/null
+    systemctl disable $SERVICE_NAME 2>/dev/null
+    rm "$SERVICE_FILE" 2>/dev/null
     rm -rf "$INSTALL_DIR"
-    rm "/usr/bin/$SHORTCUT_CMD"
-    
-    echo -e "${GREEN}>>> Uninstallation Complete.${PLAIN}"
+    rm "/usr/bin/$SHORTCUT_CMD" 2>/dev/null
+    echo -e "${GREEN}Removed.${PLAIN}"
 }
 
-# --- Menu ---
+# --- MAIN MENU ---
 
-show_menu() {
-    echo -e "\n${CYAN}--- OUTLINE MANAGER INSTALLER ---${PLAIN}"
-    echo "1. Install / Update"
-    echo "2. Edit Config"
-    echo "3. Restart Service"
-    echo "4. View Logs"
-    echo "5. Uninstall"
-    echo "0. Exit"
-    echo -e "${CYAN}-------------------------------${PLAIN}"
-    read -p "Select: " choice
+install_base_dependencies
 
-    case $choice in
-        1) full_install ;;
-        2) nano "$CONFIG_FILE" && systemctl restart $SERVICE_NAME ;;
-        3) systemctl restart $SERVICE_NAME && echo -e "${GREEN}Restarted.${PLAIN}" ;;
-        4) journalctl -u $SERVICE_NAME -n 50 -f ;;
-        5) uninstall ;;
-        0) exit 0 ;;
-        *) echo "Invalid option" ;;
-    esac
-}
+echo -e "\n${CYAN}========================================${PLAIN}"
+echo -e "${CYAN}   OUTLINE MANAGER SETUP (SPLIT MODE)   ${PLAIN}"
+echo -e "${CYAN}========================================${PLAIN}"
+echo "1. Install on KHAREJ Server (Core & Manager)"
+echo "2. Install on IRAN Server (Bridge & SSL)"
+echo "3. Uninstall"
+echo "0. Exit"
+echo -e "${CYAN}----------------------------------------${PLAIN}"
+read -p "Select Mode: " mode
 
-# Run
-if [ "$1" == "install" ]; then
-    full_install
-elif [ "$1" == "uninstall" ]; then
-    uninstall
-else
-    show_menu
-fi
+case $mode in
+    1) install_core_kharej ;;
+    2) install_bridge_iran ;;
+    3) uninstall ;;
+    0) exit 0 ;;
+    *) echo "Invalid option" ;;
+esac
